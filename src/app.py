@@ -1,14 +1,15 @@
 import os
 import re
 import sqlite3
-from bs4 import BeautifulSoup
-import requests
 import time
 import queue
+import threading
+from bs4 import BeautifulSoup
+import requests
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import threading
+
 
 def extract_data_from_parsed_table(data):
     """
@@ -28,13 +29,13 @@ def extract_data_from_parsed_table(data):
 
     print(f"\n{header_list}\n")
     #body = data.tbody   # Datos
-    
     table = []  # La lista final que tendrá todos los diccionarios
     for i in data.tbody.find_all("tr"): # columns
         row_list = {}   # Crear un nuevo diccionario que usaré para cada iteración
         #print(type(i))
         row = i.find_all("td")  # rows
-        for j, text in enumerate(row):  # en cada iteración guardo el tipo de dato al que corresponde en el diccionario
+        # en cada iteración guardo el tipo de dato al que corresponde en el diccionario
+        for j, text in enumerate(row):
             #print(text.get_text())
             if(j==0):
                 row_list["year"] = int(text.get_text())
@@ -114,6 +115,9 @@ def insert_data(df,cur,conexion):
     # )
     # conexion.commit()
 def connect_create_insert_db(df):
+    """
+    If tesla.db exists connect to the database, create the tables, insert data in the tables
+    """
     # conexión a la BD tesla
     db_name = "tesla.db"
     con = sqlite3.connect(db_name)
@@ -182,21 +186,40 @@ def plot_dataframe_data(dataframe):
     # plt.legend()
     # plt.show()
 # Graficar Concurrentemente
-def plot_dataframe_data_threading(dataframe):
+def plot_dataframe_data_threading(dataframes):
     ## GRAFICAR
     # Gráfica de lineas
-    # fig, axes = plt.subplots(1, 1, figsize = (10,5))
+    fig, axes = plt.subplots(2, 1, figsize = (10,5))
+    
     # Primer gráfico - OK
-    dataframe_aux = [pd.DataFrame(data=d) for d in dataframe ]
+    dataframe_aux = [pd.DataFrame(data=d) for d in dataframes ]
     print("Esto tiene el df concurrente:",dataframe_aux)
-    for _,data in enumerate(dataframe_aux):
-        plt.figure(figsize=(8,5))
-        sns.lineplot(data, x="Year", y=data.iloc[:,1])
-        sns.regplot(data, x="Year", y=data.iloc[:,1])
+    for i,data in enumerate(dataframe_aux):
+        #plt.figure(figsize=(8,5))
+        sns.lineplot(data, x="Year", y=data.iloc[:,1], ax = axes[i])
+        sns.regplot(data, x="Year", y=data.iloc[:,1], ax = axes[i])
     plt.tight_layout()
+    plt.show(block=False)
+    # Crear nueva figura para el scatterplot
+    _, axes_scatterplot = plt.subplots(2, 1, figsize = (10,8))
+    for i,data in enumerate(dataframe_aux):
+        sns.scatterplot(data=data, x=data.iloc[:, 1], y="Change",ax=axes_scatterplot[i])
+        sns.regplot(data, x=data.iloc[:,1], y="Change", ax = axes_scatterplot[i])
+    plt.title("Scatterplot Change",loc='right')
+    plt.show(block=False)
+    
+    df_earnings, df_revenue = dataframe_aux
+    
+    df_combined = df_earnings.merge(df_revenue, on="Year", suffixes=("_earnings", "_revenue"))
+    df_combined = df_combined.sort_values(by="Year", ascending=True)
+    df_combined.plot(x="Year", y=["Earnings", "Revenue"], kind="bar", figsize=(12, 6))
+    plt.title("Comparación de Earnings y Revenue por año")
     plt.show()
 
+    
+
 def get_data_from_url(url):
+    start = time.time()
     # GET al servidor
     response = requests.get(url = url, timeout = 10 )
     # Si todo es correcto
@@ -214,6 +237,9 @@ def get_data_from_url(url):
         print("\nDATAFRAME\n",df)
         ## BBDD
         connect_create_insert_db(df=df)
+        # Tiempo de ejecución del programa
+        end = time.time()
+        print(f"Tiempo de ejecución (Sin concurrencia):{end-start:.4f} segundos")
         ## GRAFICAR
         plot_dataframe_data(dataframe=df)
     # Si no es correcto
@@ -240,31 +266,35 @@ def get_data_from_url_threading(url, result_queue):
         connect_create_insert_db(df=df)
         ## GRAFICAR
         #plot_dataframe_data(dataframe=df)
-        result_queue.put(df)
+        result_queue.put(df) # añado el df a la cola
     # Si no es correcto
     else:
         print("Something went wrong.")
 
 def concurrence_execution_get_data_from_url(urls):
     """Function execution of threads in concurrence of the function get_data_from_url_threading."""
+    start = time.time()
     threads = []
     # Concurrente
     result_queue = queue.Queue() # cola para pasar datos entre hilos
     ##
     for url_dict in urls :
         url_arg = url_dict["url"] # Extrae la URL del diccionario
-        thread = threading.Thread(target=get_data_from_url_threading, args=(url_arg,result_queue))
+        thread = threading.Thread(target=get_data_from_url_threading, args=(url_arg,result_queue)) # paso la cola al thread
         threads.append(thread)
         thread.start()
 
     for thread in threads:
         thread.join()
     results = []
-    while not result_queue.empty():
-        dict_queue = dict(result_queue.get())
-        results.append(dict_queue)
+    while not result_queue.empty(): # si la no está vacía
+        dict_queue = dict(result_queue.get())   # diccionario de df (put)
+        results.append(dict_queue)              # lista de diccionarios
+    
+    end = time.time()
+    print(f"Tiempo de ejecución con concurrencia:{end-start:.4f} segundos")
 
-    plot_dataframe_data_threading(dataframe=results)
+    plot_dataframe_data_threading(dataframes=results)
 
 ## MAIN CODE
 try:
@@ -276,11 +306,14 @@ try:
     # get_data_from_url(url_earnings)
 
     # Con Concurrencia
+    
     urls_list = [
         {'url': 'https://companies-market-cap-copy.vercel.app/index.html'},
         {'url': 'https://companies-market-cap-copy.vercel.app/earnings.html'}
     ]
+    
     concurrence_execution_get_data_from_url(urls=urls_list)
+    
     
 # Timeout del requests.get se cumple y el servidor lo supera
 except requests.exceptions.Timeout:
