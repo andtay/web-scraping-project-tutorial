@@ -42,9 +42,9 @@ def extract_data_from_parsed_table(data):
             elif(j==1):
                 # [0-9.] permite solo numeros del 0-0 y puntos
                 # [^0-9.] niega lo que está dentro con ^
-                row_list["revenue"] = float(re.sub(r'[^0-9.]',"",text.get_text()))
+                row_list["revenue"] = float(re.sub(r'[^0-9.-]',"",text.get_text()))
             elif(j==2):
-                _text = re.sub(r'[^0-9.]',"",text.get_text())
+                _text = re.sub(r'[^0-9.-]',"",text.get_text())
                 if(_text != ""):
                     row_list["change"] = float(_text)
                 else:
